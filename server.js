@@ -6,22 +6,29 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// --- DATA PERSISTENCE LAYER ---
+// --- DYNAMIC IN-MEMORY STORE WITH LOCAL BACKUP ---
+let lettersMemory = [];
 const DB_FILE = path.join(__dirname, 'letters_db.json');
-if (!fs.existsSync(DB_FILE)) {
-    fs.writeFileSync(DB_FILE, JSON.stringify({ letters: [] }, null, 2));
-}
 
-function getLetters() {
+// Initial boot check for local storage
+if (fs.existsSync(DB_FILE)) {
     try {
-        return JSON.parse(fs.readFileSync(DB_FILE, 'utf8')).letters;
+        lettersMemory = JSON.parse(fs.readFileSync(DB_FILE, 'utf8')).letters || [];
     } catch (e) {
-        return [];
+        lettersMemory = [];
     }
 }
 
+function getLetters() {
+    return lettersMemory.sort((a, b) => a.order - b.order);
+}
+
 function saveLetters(letters) {
-    fs.writeFileSync(DB_FILE, JSON.stringify({ letters }, null, 2));
+    lettersMemory = letters;
+    // Always write a local backup copy
+    try {
+        fs.writeFileSync(DB_FILE, JSON.stringify({ letters }, null, 2));
+    } catch(e) {}
 }
 
 // --- MIDDLEWARE & STORAGE CONFIG ---
@@ -33,23 +40,31 @@ if (!fs.existsSync(path.join(__dirname, 'uploads'))) {
     fs.mkdirSync(path.join(__dirname, 'uploads'));
 }
 
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, 'uploads/'),
-    filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
-});
-const upload = multer({ storage });
+// Inline base64 conversion handler to bypass disk storage requirements entirely
+const storage = multer.memoryStorage();
+const upload = multer({ storage: storage });
 
 // --- API ENDPOINTS ---
 app.post('/api/letters', upload.single('letterImage'), (req, res) => {
     const { author, relationship, letterText, order } = req.body;
     const letters = getLetters();
     
+    let content = letterText;
+    let type = 'text';
+
+    // If an image is attached, convert it to an immutable inline URL data string
+    if (req.file) {
+        type = 'image';
+        const base64Image = req.file.buffer.toString('base64');
+        content = `data:${req.file.mimetype};base64,${base64Image}`;
+    }
+    
     const newLetter = {
         id: Date.now().toString(),
         author: author || 'Anonymous',
         relationship: relationship || '',
-        type: req.file ? 'image' : 'text',
-        content: req.file ? `/uploads/${req.file.filename}` : letterText,
+        type: type,
+        content: content,
         order: parseInt(order) || (letters.length + 1)
     };
     
@@ -60,13 +75,6 @@ app.post('/api/letters', upload.single('letterImage'), (req, res) => {
 
 app.post('/api/letters/delete/:id', (req, res) => {
     let letters = getLetters();
-    const letterToDelete = letters.find(l => l.id === req.params.id);
-    if (letterToDelete && letterToDelete.type === 'image') {
-        const filePath = path.join(__dirname, letterToDelete.content);
-        if (fs.existsSync(filePath)) {
-            try { fs.unlinkSync(filePath); } catch(e) {}
-        }
-    }
     letters = letters.filter(l => l.id !== req.params.id);
     saveLetters(letters);
     res.redirect('/admin');
@@ -81,19 +89,14 @@ app.get('/admin', (req, res) => {
     res.send(getHtmlLayout('admin'));
 });
 
-// --- UTILITY HELPER FOR HTML ESCAPING ---
 function escapeHtml(str) {
     if (!str) return '';
-    return str.replace(/&/g, '&amp;')
-              .replace(/</g, '&lt;')
-              .replace(/>/g, '&gt;')
-              .replace(/"/g, '&quot;')
-              .replace(/'/g, '&#039;');
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 }
 
-// --- MONOLITHIC HTML GENERATOR (SERVER-SIDE RENDERED) ---
+// --- MONOLITHIC HTML GENERATOR ---
 function getHtmlLayout(view) {
-    const letters = getLetters().sort((a, b) => a.order - b.order);
+    const letters = getLetters();
 
     const adminRows = letters.map(l => `
         <tr class="border-b bg-white hover:bg-gray-50">
@@ -110,14 +113,12 @@ function getHtmlLayout(view) {
         </tr>
     `).join('');
 
-    // Render the Timeline Cards strictly on the Backend architecture
     let timelineContent = '';
     if (letters.length === 0) {
         timelineContent = '<div class="text-center py-12 text-gray-400 font-medium ml-4">The dynamic exhibition is being populated right now. Check back shortly.</div>';
     } else {
         timelineContent = letters.map(item => {
             const badge = `<div class="absolute -left-[13px] top-1.5 bg-gradient-to-r from-rose-400 to-pink-500 text-white w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shadow-md ring-4 ring-white transition-transform group-hover:scale-110">${item.order}</div>`;
-            
             const relationshipBadge = item.relationship ? `<span class="text-xs font-medium text-rose-500 bg-rose-50 px-2 py-0.5 rounded-full mt-1 inline-block">${escapeHtml(item.relationship)}</span>` : '';
             
             let coreMediaHtml = '';
@@ -125,8 +126,8 @@ function getHtmlLayout(view) {
                 coreMediaHtml = `<div class="font-cursive text-3xl text-gray-700 leading-relaxed tracking-wide whitespace-pre-wrap">${escapeHtml(item.content)}</div>`;
             } else {
                 coreMediaHtml = `
-                    <div class="relative cursor-zoom-in group-inner" onclick="openLightbox('${encodeURI(item.content)}')">
-                        <img src="${encodeURI(item.content)}" class="max-h-[32rem] w-full object-cover rounded-xl border border-gray-100 shadow-sm transition hover:opacity-95">
+                    <div class="relative cursor-zoom-in group-inner" onclick="openLightbox('${item.content}')">
+                        <img src="${item.content}" class="max-h-[32rem] w-full object-cover rounded-xl border border-gray-100 shadow-sm transition hover:opacity-95">
                         <div class="absolute inset-0 bg-black/5 opacity-0 group-hover:opacity-100 transition rounded-xl flex items-center justify-center text-white text-sm font-semibold">Click to expand</div>
                     </div>`;
             }
@@ -167,7 +168,6 @@ function getHtmlLayout(view) {
         </style>
     </head>
     <body class="bg-gradient-to-tr from-rose-50 via-peach-50 to-amber-50 min-h-screen font-sans antialiased text-gray-800">
-
         ${isAdmin ? `
         <div class="max-w-4xl mx-auto py-12 px-4">
             <div class="flex justify-between items-center mb-8 bg-white p-6 rounded-2xl shadow-sm border border-rose-100">
@@ -177,46 +177,44 @@ function getHtmlLayout(view) {
                 </div>
                 <a href="/" target="_blank" class="bg-rose-500 hover:bg-rose-600 text-white px-4 py-2 rounded-xl text-sm font-medium shadow-sm transition">View Live Website</a>
             </div>
-
             <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
                 <div class="bg-white p-6 rounded-2xl shadow-sm border border-rose-100 h-fit md:col-span-1">
                     <h2 class="text-lg font-semibold mb-4 text-gray-900">Add New Letter</h2>
                     <form action="/api/letters" method="POST" enctype="multipart/form-data" class="space-y-4">
                         <div>
                             <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Author Name</label>
-                            <input type="text" name="author" required class="w-full px-3 py-2 border rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-400 text-sm">
+                            <input type="text" name="author" required class="w-full px-3 py-2 border rounded-xl text-sm">
                         </div>
                         <div>
                             <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Relationship</label>
-                            <input type="text" name="relationship" placeholder="e.g., Best Friend, Mom" class="w-full px-3 py-2 border rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-400 text-sm">
+                            <input type="text" name="relationship" placeholder="e.g., Mom" class="w-full px-3 py-2 border rounded-xl text-sm">
                         </div>
                         <div>
-                            <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Timeline Order (1-21)</label>
-                            <input type="number" name="order" min="1" max="21" value="${letters.length + 1}" required class="w-full px-3 py-2 border rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-400 text-sm">
+                            <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Timeline Order</label>
+                            <input type="number" name="order" min="1" max="21" value="${letters.length + 1}" required class="w-full px-3 py-2 border rounded-xl text-sm">
                         </div>
                         <div>
-                            <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Letter Content Type</label>
-                            <select id="typeSelector" onchange="toggleInputType()" class="w-full px-3 py-2 border rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-rose-400 text-sm">
+                            <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Type</label>
+                            <select id="typeSelector" onchange="toggleInputType()" class="w-full px-3 py-2 border rounded-xl bg-white text-sm">
                                 <option value="text">Written Text Letter</option>
                                 <option value="image">Uploaded Picture / Photo</option>
                             </select>
                         </div>
                         <div id="textInputGroup">
                             <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Letter Text</label>
-                            <textarea name="letterText" rows="5" class="w-full px-3 py-2 border rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-400 text-sm"></textarea>
+                            <textarea name="letterText" rows="5" class="w-full px-3 py-2 border rounded-xl text-sm"></textarea>
                         </div>
                         <div id="imageInputGroup" class="hidden">
-                            <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Upload Image File</label>
-                            <input type="file" name="letterImage" accept="image/*" class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-semibold file:bg-rose-50 file:text-rose-700 hover:file:bg-rose-100">
+                            <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Upload Image</label>
+                            <input type="file" name="letterImage" accept="image/*" class="w-full text-sm text-gray-500">
                         </div>
-                        <button type="submit" class="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-2.5 rounded-xl text-sm transition">Save to Master Mix</button>
+                        <button type="submit" class="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-2.5 rounded-xl text-sm">Save to Master Mix</button>
                     </form>
                 </div>
-
                 <div class="bg-white rounded-2xl shadow-sm border border-rose-100 overflow-hidden md:col-span-2">
                     <table class="w-full text-left border-collapse">
                         <thead>
-                            <tr class="bg-gray-50 border-b border-gray-100 text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                            <tr class="bg-gray-50 border-b border-gray-100 text-xs font-semibold text-gray-500 uppercase">
                                 <th class="px-6 py-3">Order</th>
                                 <th class="px-6 py-3">From</th>
                                 <th class="px-6 py-3">Type</th>
@@ -224,7 +222,7 @@ function getHtmlLayout(view) {
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-gray-100 text-sm text-gray-600">
-                            ${adminRows || '<tr><td colspan="4" class="text-center py-8 text-gray-400">No letters curated yet. Add your first letter above!</td></tr>'}
+                            ${adminRows || '<tr><td colspan="4" class="text-center py-8">No letters curated yet.</td></tr>'}
                         </tbody>
                     </table>
                 </div>
@@ -241,19 +239,16 @@ function getHtmlLayout(view) {
         <header class="text-center py-16 px-4 max-w-2xl mx-auto">
             <span class="text-rose-500 font-semibold tracking-widest uppercase text-xs px-3 py-1 bg-rose-100 rounded-full">Happy 21st Birthday</span>
             <h1 class="text-5xl font-extrabold mt-3 text-gray-900 tracking-tight">21 Chapters of Mannat</h1>
-            <p class="mt-4 text-gray-600 text-base leading-relaxed">21 letters, memories, and blessings curated carefully from the people who love you most. Scroll down to unpack your chapters.</p>
+            <p class="mt-4 text-gray-600 text-base leading-relaxed">21 letters, memories, and blessings curated carefully from the people who love you most.</p>
         </header>
-
         <main class="max-w-4xl mx-auto px-4 pb-24">
             <div id="timelineContainer" class="relative border-l-2 border-rose-200 ml-4 md:ml-32 space-y-12">
                 ${timelineContent}
             </div>
         </main>
-
         <div id="lightbox" class="fixed inset-0 bg-black/90 hidden z-50 flex items-center justify-center p-4" onclick="this.classList.add('hidden')">
-            <img id="lightboxImg" class="max-w-full max-h-full rounded-lg shadow-2xl object-contain" src="" alt="Enlarged view">
+            <img id="lightboxImg" class="max-w-full max-h-full rounded-lg shadow-2xl object-contain" src="">
         </div>
-
         <script>
             function openLightbox(src) {
                 document.getElementById('lightboxImg').src = src;
@@ -269,8 +264,8 @@ function getHtmlLayout(view) {
 // --- INITIALIZE APPLICATION ENGINE ---
 app.listen(PORT, () => {
     console.log("=======================================================");
-    console.log("  ❤️  SSR ARCHITECT ENGINE ACTIVE RUNNING");
-    console.log(`  👉 Birthday Interface URL: http://localhost:${PORT}`);
-    console.log(`  👉 Admin Studio URL:       http://localhost:${PORT}/admin`);
+    console.log("  ❤️  INLINE IMMUTABLE SYSTEM ONLINE RUNNING");
+    console.log(`  👉 Live Local Port Engine: http://localhost:${PORT}`);
+    console.log(`  👉 Live Local Port Engine: http://localhost:${PORT}/admin`);
     console.log("=======================================================");
 });
