@@ -249,6 +249,11 @@ function getHtmlLayout(view) {
         <div id="lightbox" class="fixed inset-0 bg-black/90 hidden z-50 flex items-center justify-center p-4" onclick="this.classList.add('hidden')">
             <img id="lightboxImg" class="max-w-full max-h-full rounded-lg shadow-2xl object-contain" src="">
         </div>
+
+        <footer class="text-center py-6 text-sm text-gray-500">
+            <p>&copy; Copyright reserved by Yajat Gupta till 2036.</p>
+        </footer>
+        
         <script>
             function openLightbox(src) {
                 document.getElementById('lightboxImg').src = src;
@@ -256,6 +261,8 @@ function getHtmlLayout(view) {
             }
         </script>
         `}
+        
+        
     </body>
     </html>
     `;
