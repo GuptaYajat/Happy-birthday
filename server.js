@@ -238,7 +238,7 @@ function getHtmlLayout(view) {
         ` : `
         <header class="text-center py-16 px-4 max-w-2xl mx-auto">
             <span class="text-rose-500 font-semibold tracking-widest uppercase text-xs px-3 py-1 bg-rose-100 rounded-full">Happy 21st Birthday</span>
-            <h1 class="text-5xl font-extrabold mt-3 text-gray-900 tracking-tight">21 Chapters of Mannat</h1>
+            <h1 class="text-5xl font-extrabold mt-3 text-gray-900 tracking-tight">21 Chapters of Mannat 🧿🧿</h1>
             <p class="mt-4 text-gray-600 text-base leading-relaxed">21 letters, memories, and blessings curated carefully from the people who love you most.</p>
         </header>
         <main class="max-w-4xl mx-auto px-4 pb-24">
